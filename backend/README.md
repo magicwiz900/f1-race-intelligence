@@ -1,6 +1,6 @@
 # F1 Race Intelligence - Backend
 
-The backend for **F1 Race Intelligence** provides a FastAPI REST API serving F1 race predictions, session-by-session telemetry analytics, dynamic win probability progression, and driver/team comparisons.
+The backend for **F1 Race Intelligence** provides a FastAPI REST API, PostgreSQL database models via SQLAlchemy 2.x, Alembic schema migrations, and stage-aware prediction endpoints.
 
 ---
 
@@ -10,15 +10,30 @@ The backend for **F1 Race Intelligence** provides a FastAPI REST API serving F1 
 backend/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py          # FastAPI application entrypoint & middleware configuration
-│   ├── config.py        # Environment & application configuration via pydantic-settings
+│   ├── main.py          # FastAPI application entrypoint & middleware
+│   ├── config.py        # Environment settings via pydantic-settings
+│   ├── database.py      # SQLAlchemy engine, sessionmaker & Base
+│   ├── models/          # SQLAlchemy 2.x ORM models
+│   │   ├── __init__.py
+│   │   ├── team.py
+│   │   ├── driver.py
+│   │   ├── race.py
+│   │   ├── session.py
+│   │   ├── session_result.py
+│   │   └── prediction.py
 │   └── api/
 │       ├── __init__.py
 │       └── health.py    # Health check endpoint
+├── migrations/          # Alembic database migration scripts
+│   ├── versions/
+│   │   └── 0001_initial_schema.py
+│   ├── env.py
+│   └── script.py.mako
 ├── tests/
-│   ├── __init__.py
-│   └── test_health.py   # Health endpoint unit tests
-├── .env.example         # Example environment variables
+│   ├── test_health.py   # Health check API tests
+│   └── test_database.py # Database schema & ORM relationship tests
+├── alembic.ini          # Alembic migration configuration
+├── .env.example         # Environment variable template
 ├── requirements.txt     # Python dependencies
 └── README.md
 ```
@@ -29,7 +44,7 @@ backend/
 
 ### 1. Create Virtual Environment
 
-From the `backend/` directory (or workspace root):
+From the `backend/` directory:
 
 ```bash
 # Windows (PowerShell)
@@ -49,56 +64,68 @@ pip install -r requirements.txt
 
 ---
 
-## Environment Configuration
+## Database Setup & PostgreSQL Configuration
 
-Copy `.env.example` to `.env` if local custom settings are required:
+### Database URL Format
+The database connection string uses PostgreSQL with the `psycopg3` driver (`postgresql+psycopg://`):
 
-```bash
-cp .env.example .env
+```env
+DATABASE_URL=postgresql+psycopg://<user>:<password>@localhost:5432/<dbname>
 ```
 
-Available environment variables:
-* `APP_NAME`: Application title (default: `"F1 Race Intelligence API"`)
-* `APP_ENV`: Deployment environment (default: `"development"`)
-* `DATABASE_URL`: PostgreSQL connection string (placeholder for future steps)
-* `API_KEY`: Secret key placeholder
-* `CORS_ORIGINS`: Allowed origins list for frontend CORS communication
+### Starting PostgreSQL via Docker Compose
+
+From the root project directory:
+
+```bash
+docker-compose up -d postgres
+```
+
+This starts a PostgreSQL 16 container bound to port `5432` with database `f1_race_intelligence`.
+
+### Running Database Migrations (Alembic)
+
+```bash
+# Apply migrations to update schema to head
+alembic upgrade head
+
+# Check current migration revision
+alembic current
+
+# Preview generated SQL without executing against database
+alembic upgrade head --sql
+```
 
 ---
 
-## Running the Server
+## Database Schema Overview
 
-Start the development server with auto-reload:
+| Model | Table | Key Fields & Constraints | Description |
+|---|---|---|---|
+| `Team` | `teams` | `id` (PK), `name` (Unique), `constructor_code` (Unique), `country` | F1 Constructor/Team metadata |
+| `Driver` | `drivers` | `id` (PK), `driver_code` (Unique), `name`, `team_id` (FK -> teams.id) | F1 Driver details and team mapping |
+| `Race` | `races` | `id` (PK), `season`, `round`, `race_name`, `circuit`, Unique(`season`, `round`) | Grand Prix weekend event info |
+| `Session` | `sessions` | `id` (PK), `race_id` (FK -> races.id), `session_type` (`FP1`, `FP2`, `FP3`, `QUALIFYING`, `RACE`) | Specific race weekend session |
+| `SessionResult` | `session_results` | `id` (PK), `session_id` (FK), `driver_id` (FK), `position`, `lap_time`, `sector_1/2/3`, `tyre`, `laps` | Timing & sector results per session |
+| `Prediction` | `predictions` | `id` (PK), `race_id` (FK), `driver_id` (FK), `prediction_stage`, `win_probability`, `podium_probability`, `top5_probability`, `model_version` | Model prediction outputs per weekend stage |
+
+---
+
+## Running the Development Server
 
 ```bash
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- **Interactive API Documentation (Swagger UI)**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- **Alternative ReDoc Docs**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+- **Interactive Swagger Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **Health Check Endpoint**: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
 
 ---
 
 ## Running Tests
 
-Run the backend test suite using `pytest`:
+Run the full backend test suite:
 
 ```bash
 pytest
 ```
-
----
-
-## API Endpoints
-
-### Health Check
-
-* **Endpoint**: `GET /api/health`
-* **Description**: Verifies backend service status and health readiness.
-* **Response (200 OK)**:
-  ```json
-  {
-    "status": "ok",
-    "service": "f1-race-intelligence"
-  }
-  ```
