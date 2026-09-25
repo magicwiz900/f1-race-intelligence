@@ -34,6 +34,15 @@ ml/models/*.pkl
 !ml/models/.gitkeep
 ml/artifacts/*.csv
 !ml/artifacts/.gitkeep
+ml/artifacts/models/*.joblib
+!ml/artifacts/models/.gitkeep
+ml/artifacts/metrics/*.json
+!ml/artifacts/metrics/.gitkeep
+ml/artifacts/calibration/*.json
+!ml/artifacts/calibration/.gitkeep
+ml/artifacts/metadata/*.json
+!ml/artifacts/metadata/.gitkeep
+
 
 
 # IDEs & Editors

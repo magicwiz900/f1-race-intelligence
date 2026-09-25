@@ -1,6 +1,6 @@
-# F1 Race Intelligence - ML Data Pipeline & Feature Engineering
+# F1 Race Intelligence - ML Data Pipeline & Training Layer
 
-This module powers the stage-aware feature engineering, data leakage prevention, and dataset generation pipeline for **F1 Race Intelligence**.
+This module powers the stage-aware feature engineering, data leakage prevention, chronological dataset splitting, model training, calibration evaluation, and explainability layer for **F1 Race Intelligence**.
 
 ---
 
@@ -11,6 +11,7 @@ ml/
 ├── __init__.py
 ├── stages.py             # Centralized PredictionStage enum & stage hierarchy
 ├── config.py             # Pipeline configuration, constants, and paths
+├── data_split.py         # Chronological race boundary dataset splitting utility
 ├── features/
 │   ├── __init__.py
 │   ├── metadata.py       # Comprehensive metadata for all features
@@ -22,17 +23,25 @@ ml/
 ├── datasets/
 │   ├── __init__.py
 │   └── build_dataset.py  # CLI script building dataset from PostgreSQL database
+├── training/
+│   ├── __init__.py
+│   ├── trainer.py        # Model training, evaluation, and calibration logic
+│   └── train_models.py   # CLI entrypoint for training all models
 ├── validation/
 │   ├── __init__.py
 │   └── leakage_checks.py # Automated data leakage verification functions
-├── artifacts/            # Output folder for dataset artifacts (.csv)
-│   └── .gitkeep
-└── tests/                # Unit & leakage tests
+├── artifacts/            # Generated model weights, metrics, and metadata
+│   ├── models/           # .joblib trained model pipelines
+│   ├── metrics/          # model_metrics.json
+│   ├── calibration/      # calibration_data.json
+│   └── metadata/         # model_metadata.json & feature_metadata.json
+└── tests/                # Unit, leakage, and training tests
     ├── __init__.py
     ├── conftest.py
     ├── test_features.py
     ├── test_dataset.py
-    └── test_leakage.py
+    ├── test_leakage.py
+    └── test_training.py
 ```
 
 ---
@@ -54,62 +63,47 @@ Centralized enum defined in `ml/stages.py`:
 1. `PRE_FP1`: Before Free Practice 1. Only historical form and circuit history available.
 2. `POST_FP1`: After Free Practice 1. Includes FP1 pace and position.
 3. `POST_FP2`: After Free Practice 2. Includes FP1 and FP2 pace and position.
-4. `POST_FP3`: After Free Practice 3. Includes FP1, FP2, and FP3 pace and position.
-5. `POST_QUALIFYING`: After Qualifying. Includes all practice sessions and Qualifying grid position/time.
-6. `FINAL`: Pre-race state after all weekend sessions completed.
+4. `POST_QUALIFYING`: After Qualifying. Includes all practice sessions and Qualifying grid position/time.
+5. `FINAL`: Pre-race state after all weekend sessions completed.
 
 ---
 
-## Target Variables
+## Models & Targets
 
-Target variables are derived **strictly** from the actual `RACE` session results:
-* `race_finish_position`: Driver's integer finishing position in the main race (1..N).
-* `race_win`: Binary indicator (`1` if finish position is 1, else `0`).
-* `race_podium`: Binary indicator (`1` if finish position $\le 3$, else `0`).
-* `race_top5`: Binary indicator (`1` if finish position $\le 5$, else `0`).
-
-> [!IMPORTANT]
-> The target variables come from the actual `RACE` session and are **never** included in feature sets.
+1. **Win Probability Model**: `LogisticRegression(class_weight='balanced')` predicting `race_win` (1/0). Evaluated using **Log Loss** and **Brier Score**.
+2. **Finish Position Model**: `RandomForestRegressor(n_estimators=100, max_depth=6)` predicting `race_finish_position` (1..20). Evaluated using **MAE** and **RMSE**.
+3. **Podium Model**: `LogisticRegression` predicting `race_podium` (1/0). Evaluated using Log Loss, Brier Score, and ROC-AUC.
+4. **Top 5 Model**: `LogisticRegression` predicting `race_top5` (1/0). Evaluated using Log Loss, Brier Score, and ROC-AUC.
 
 ---
 
-## Data Leakage Prevention Strategy
+## Data Leakage Prevention & Chronological Splitting
 
-Data leakage is prevented through explicit, automated rules in `ml/features/feature_pipeline.py` and `ml/validation/leakage_checks.py`:
-- **Stage Availability Masking**: Any feature associated with a session chronologically after the current prediction stage is set to `NaN` (masked).
-- **Chronological Filtering**: Rolling historical form (driver/team) and circuit history features strictly compute metrics using races that occurred **before** the target race `(season, round)`.
-- **Target Separation**: Race results are isolated in target columns and checked by automated tests (`test_leakage.py`).
-
----
-
-## Chronological Validation Strategy
-
-To evaluate ML models realistically, **random cross-validation MUST NOT be used**. F1 data has inherent temporal dependencies.
-- **Training Set**: Historical seasons (e.g. earlier years / early season rounds).
-- **Validation Set**: Mid-season rounds.
-- **Test Set**: Recent rounds / final season races.
+- **Target Separation**: Target columns (`race_finish_position`, `race_win`, `race_podium`, `race_top5`) are strictly isolated from the feature matrix `X`.
+- **Race Boundary Splitting**: Splitting is performed chronologically by race boundaries (`season`, `round`). Complete races remain together; no race is split across training and testing partitions.
+  - **Train**: Rounds 1–14 (14 races, 1,674 rows)
+  - **Validation**: Rounds 15–19 (5 races, 600 rows)
+  - **Test**: Rounds 20–24 (5 races, 600 rows)
 
 ---
 
-## Dataset Generation Command
+## Running Dataset Generation & Model Training
 
-To generate the dataset from the PostgreSQL database:
-
+### 1. Build Dataset
 ```bash
 python -m ml.datasets.build_dataset --output ml/artifacts/f1_features_dataset.csv
+```
+
+### 2. Train & Evaluate Models
+```bash
+python -m ml.training.train_models --dataset ml/artifacts/f1_features_dataset.csv
 ```
 
 ---
 
 ## Running Tests
 
-Run the ML unit test suite:
-
-```bash
-pytest ml/tests/
-```
-
-Run all backend and ML tests together:
+Run the full test suite (backend + ML):
 
 ```bash
 pytest

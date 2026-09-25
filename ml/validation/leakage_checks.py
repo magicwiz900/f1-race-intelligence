@@ -9,6 +9,28 @@ from ml.stages import PredictionStage, is_stage_at_or_after
 logger = logging.getLogger(__name__)
 
 
+def validate_feature_target_separation(feature_names: List[str]) -> bool:
+    """
+    Verify that no target columns appear in the feature column list X.
+    Raises ValueError if a target column is detected in feature list.
+    """
+    leakage_detected = []
+    for feat in feature_names:
+        if feat in TARGET_COLUMNS:
+            leakage_detected.append(feat)
+        elif "finish_position" in feat and feat != "driver_recent_avg_finish" and feat != "team_recent_avg_finish" and feat != "driver_circuit_avg_finish":
+            leakage_detected.append(feat)
+        elif feat in ["race_win", "race_podium", "race_top5", "position"]:
+            leakage_detected.append(feat)
+
+    if leakage_detected:
+        msg = f"Target Leakage Detected! Target columns found in feature matrix X: {leakage_detected}"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    return True
+
+
 def verify_row_stage_compliance(row: pd.Series) -> List[str]:
     """
     Verify a single DataFrame row against stage availability rules.
@@ -25,17 +47,10 @@ def verify_row_stage_compliance(row: pd.Series) -> List[str]:
 
     violations = []
 
-    # 1. Target leak check: Ensure target values are not inside feature names
-    for target_col in TARGET_COLUMNS:
-        if target_col in row and pd.notna(row[target_col]):
-            # Targets are allowed in target columns, but must not be treated as features
-            pass
-
-    # 2. Stage metadata compliance check
+    # Stage metadata compliance check
     for feat_name, meta in FEATURE_METADATA.items():
         first_avail = meta.get("first_available_stage")
         if first_avail and not is_stage_at_or_after(stage, first_avail):
-            # Feature is forbidden at this stage
             val = row.get(feat_name)
             if pd.notna(val):
                 violations.append(
