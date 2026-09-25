@@ -32,6 +32,9 @@ data/processed/*
 ml/models/*.joblib
 ml/models/*.pkl
 !ml/models/.gitkeep
+ml/artifacts/*.csv
+!ml/artifacts/.gitkeep
+
 
 # IDEs & Editors
 .vscode/
