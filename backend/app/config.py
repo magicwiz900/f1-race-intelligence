@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/f1_race_intelligence"
     TEST_DATABASE_URL: Optional[str] = None
     
+    # F1 API Configuration
+    F1_API_BASE_URL: str = "https://api.jolpi.ca/ergast/f1"
+    
     # API key placeholder
     API_KEY: str = ""
     

@@ -1,6 +1,6 @@
 # F1 Race Intelligence - Backend
 
-The backend for **F1 Race Intelligence** provides a FastAPI REST API, PostgreSQL database models via SQLAlchemy 2.x, Alembic schema migrations, and stage-aware prediction endpoints.
+The backend for **F1 Race Intelligence** provides a FastAPI REST API, PostgreSQL database models via SQLAlchemy 2.x, Alembic schema migrations, stage-aware prediction endpoints, and an F1 data ingestion layer.
 
 ---
 
@@ -21,17 +21,30 @@ backend/
 │   │   ├── session.py
 │   │   ├── session_result.py
 │   │   └── prediction.py
+│   ├── services/        # Business logic & external integrations
+│   │   ├── __init__.py
+│   │   └── f1_data/     # Ingestion layer modules
+│   │       ├── __init__.py
+│   │       ├── jolpica_client.py # HTTP client for Jolpica F1 API
+│   │       ├── fastf1_service.py # FastF1 detailed session data service abstraction
+│   │       ├── transformers.py   # Raw API response transformers
+│   │       └── importer.py       # Idempotent DB data ingestion pipeline
 │   └── api/
 │       ├── __init__.py
 │       └── health.py    # Health check endpoint
+├── scripts/
+│   ├── __init__.py
+│   └── ingest_f1_data.py # CLI script for ingesting an F1 season
 ├── migrations/          # Alembic database migration scripts
 │   ├── versions/
 │   │   └── 0001_initial_schema.py
 │   ├── env.py
 │   └── script.py.mako
 ├── tests/
-│   ├── test_health.py   # Health check API tests
-│   └── test_database.py # Database schema & ORM relationship tests
+│   ├── test_health.py         # Health check API tests
+│   ├── test_database.py       # Database schema & ORM relationship tests
+│   ├── test_jolpica_client.py # Jolpica client mocked unit tests
+│   └── test_f1_importer.py    # Importer idempotency & DB mapping tests
 ├── alembic.ini          # Alembic migration configuration
 ├── .env.example         # Environment variable template
 ├── requirements.txt     # Python dependencies
@@ -61,6 +74,43 @@ source .venv/bin/activate
 ```bash
 pip install -r requirements.txt
 ```
+
+---
+
+## Data Ingestion Layer
+
+### Data Sources
+1. **Primary Structured Data**: Jolpica F1 API (`https://api.jolpi.ca/ergast/f1`) for seasons, race calendars, drivers, constructors, and race results.
+2. **Detailed Session Data**: FastF1 integration abstraction (`FastF1Service`) prepared for FP1/FP2/FP3/Qualifying/Race lap times, sector times, tyre compounds, and stints.
+
+### Architecture
+- **`JolpicaClient`**: Reusable HTTP client supporting timeout configuration, status code validation, custom exception handling (`JolpicaAPIError`, `JolpicaHTTPError`, `JolpicaParseError`), and response pagination.
+- **`FastF1Service`**: Service abstraction wrapping FastF1 for detailed session loading on demand without downloading historical datasets during app startup.
+- **`transformers`**: Pure transformation functions converting external raw JSON payloads into validated dictionary fields.
+- **`F1DataImporter`**: Pipeline orchestrator for ingesting constructors, drivers, races, race sessions (`FP1`, `FP2`, `FP3`, `QUALIFYING`, `RACE`), and session results into PostgreSQL.
+
+### How to Run Ingestion
+
+```bash
+# Ingest an F1 season (default 2025)
+python -m scripts.ingest_f1_data --season 2025
+
+# Ingest historical season e.g. 2024
+python -m scripts.ingest_f1_data --season 2024
+```
+
+### Idempotency
+The ingestion pipeline is strictly **idempotent**. Running the ingestion command multiple times will not create duplicate database records:
+- **Teams**: Upserted based on unique `constructor_code` or `name`.
+- **Drivers**: Upserted based on unique `driver_code`.
+- **Races**: Upserted using the unique (`season`, `round`) constraint (`uq_race_season_round`).
+- **Sessions**: Upserted based on (`race_id`, `session_type`).
+- **Session Results**: Upserted based on (`session_id`, `driver_id`).
+
+### Mocked Unit Testing
+Unit tests in `tests/test_jolpica_client.py` and `tests/test_f1_importer.py`:
+- Use `unittest.mock` to mock Jolpica HTTP network calls (no internet dependency).
+- Use an isolated in-memory SQLite database session (`test_db_session` / `db_session`) to test model creation, driver-to-team links, and idempotency without requiring a live PostgreSQL instance.
 
 ---
 
