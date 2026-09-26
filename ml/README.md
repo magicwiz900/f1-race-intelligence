@@ -1,6 +1,6 @@
 # F1 Race Intelligence - ML Data Pipeline & Training Layer
 
-This module powers the stage-aware feature engineering, data leakage prevention, chronological dataset splitting, model training, calibration evaluation, and explainability layer for **F1 Race Intelligence**.
+This module powers the stage-aware feature engineering, data leakage prevention, chronological dataset splitting, model training, calibration evaluation, stage progression analysis, and explainability layer for **F1 Race Intelligence**.
 
 ---
 
@@ -26,22 +26,24 @@ ml/
 ├── training/
 │   ├── __init__.py
 │   ├── trainer.py        # Model training, evaluation, and calibration logic
-│   └── train_models.py   # CLI entrypoint for training all models
+│   ├── train_models.py   # CLI entrypoint for training all models
+│   └── analyze_predictions.py # CLI script for stage-wise validation & sanity checks
 ├── validation/
 │   ├── __init__.py
 │   └── leakage_checks.py # Automated data leakage verification functions
 ├── artifacts/            # Generated model weights, metrics, and metadata
 │   ├── models/           # .joblib trained model pipelines
-│   ├── metrics/          # model_metrics.json
-│   ├── calibration/      # calibration_data.json
+│   ├── metrics/          # model_metrics.json, stage_metrics.json, winner_probability_trajectories.json
+│   ├── calibration/      # calibration_data.json, calibration_10bin_data.json
 │   └── metadata/         # model_metadata.json & feature_metadata.json
-└── tests/                # Unit, leakage, and training tests
+└── tests/                # Unit, leakage, training, and analysis tests
     ├── __init__.py
     ├── conftest.py
     ├── test_features.py
     ├── test_dataset.py
     ├── test_leakage.py
-    └── test_training.py
+    ├── test_training.py
+    └── test_analysis.py
 ```
 
 ---
@@ -63,8 +65,11 @@ Centralized enum defined in `ml/stages.py`:
 1. `PRE_FP1`: Before Free Practice 1. Only historical form and circuit history available.
 2. `POST_FP1`: After Free Practice 1. Includes FP1 pace and position.
 3. `POST_FP2`: After Free Practice 2. Includes FP1 and FP2 pace and position.
-4. `POST_QUALIFYING`: After Qualifying. Includes all practice sessions and Qualifying grid position/time.
-5. `FINAL`: Pre-race state after all weekend sessions completed.
+4. `POST_FP3`: After Free Practice 3. Includes FP1, FP2, and FP3 pace and position.
+5. `POST_QUALIFYING`: After Qualifying. Includes all practice sessions and Qualifying grid position/time.
+6. `FINAL`: Pre-race state after all weekend sessions completed (excluded from prediction REST API endpoints to avoid exposing misleading post-race predictions).
+
+> **API Integration**: Loaded by `backend/app/services/prediction_service` to serve REST predictions at `/api/races/{race_id}/predictions`. Provides both raw Logistic Regression outputs (`raw_win_probability`) and normalized race share probabilities (`race_share_probability`).
 
 ---
 
@@ -77,17 +82,34 @@ Centralized enum defined in `ml/stages.py`:
 
 ---
 
-## Data Leakage Prevention & Chronological Splitting
+## Model Sanity & Stage Analysis
 
-- **Target Separation**: Target columns (`race_finish_position`, `race_win`, `race_podium`, `race_top5`) are strictly isolated from the feature matrix `X`.
-- **Race Boundary Splitting**: Splitting is performed chronologically by race boundaries (`season`, `round`). Complete races remain together; no race is split across training and testing partitions.
-  - **Train**: Rounds 1–14 (14 races, 1,674 rows)
-  - **Validation**: Rounds 15–19 (5 races, 600 rows)
-  - **Test**: Rounds 20–24 (5 races, 600 rows)
+A comprehensive validation and sanity check was performed on the chronological test split (2025 season rounds 20–24, 600 rows):
+
+### 1. Stage-Wise Prediction Behavior
+* Evaluated pre-race stages (`PRE_FP1` through `POST_QUALIFYING`).
+* **Log Loss**: `0.4099` across stages.
+* **Brier Score**: `0.1327` across stages.
+* **Avg Predicted Win Probability of Eventual Winner**: `85.1%` (drivers with high historical form e.g. Verstappen/Norris were assigned high probabilities).
+
+### 2. Race Probability Sum Behavior
+* **Mean Probability Sum per Race**: `6.0051` (min: `5.8379`, max: `6.1011`).
+* **Finding & Architecture Note**: Because independent binary `LogisticRegression` models evaluate each driver's binary win likelihood independently with `class_weight='balanced'`, predicted probabilities across ~20 drivers sum to ~6.0 per race instead of 1.0. Softmax or post-processing normalization will be applied at the API presentation layer when displaying race-wide probabilities to frontend users.
+
+### 3. Calibration Analysis (10 Bins)
+* Evaluated across 10 probability bins `0–10%` to `90–100%`.
+* **Single-Season Limitation**: Because the current dataset only contains 2025 season data (5.01% positive win rate), higher probability bins contain small sample sizes. Calibration findings are preliminary.
+
+### 4. Finish Position Model Sanity Check
+* **MAE**: `4.8565` positions.
+* **RMSE**: `6.2633` positions.
+* **Predicted Position Range**: `2.72` to `17.92`.
+* **Out-of-Bounds Count**: `0` (All predictions fall strictly within valid grid bounds 1 to 20).
+* **Sanity Status**: `VALID`.
 
 ---
 
-## Running Dataset Generation & Model Training
+## Commands
 
 ### 1. Build Dataset
 ```bash
@@ -97,6 +119,11 @@ python -m ml.datasets.build_dataset --output ml/artifacts/f1_features_dataset.cs
 ### 2. Train & Evaluate Models
 ```bash
 python -m ml.training.train_models --dataset ml/artifacts/f1_features_dataset.csv
+```
+
+### 3. Run Stage Prediction Analysis
+```bash
+python -m ml.training.analyze_predictions --dataset ml/artifacts/f1_features_dataset.csv
 ```
 
 ---

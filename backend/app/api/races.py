@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -5,11 +6,18 @@ from sqlalchemy.orm import Session as DBSession, joinedload
 
 from app.api.deps import get_db
 from app.models import Driver, Prediction, Race, Session as F1Session, SessionResult
-from app.schemas.prediction import PredictionResponse
+from app.schemas.prediction import PredictionResponse, RacePredictionsResponse
 from app.schemas.race import RaceResponse
 from app.schemas.session import SessionResponse, SessionResultResponse
+from app.schemas.track_geometry import TrackGeometryResponse
+from app.services.f1_data.track_geometry import TrackGeometryService, TrackGeometryUnavailableError
+from app.services.prediction_service.predictor import PredictionService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/races", tags=["Races"])
+
+VALID_PREDICTION_STAGES = {"PRE_FP1", "POST_FP1", "POST_FP2", "POST_FP3", "POST_QUALIFYING"}
 
 
 @router.get(
@@ -131,18 +139,75 @@ def get_race_results(
     return response_list
 
 
+def _get_race_predictions_impl(race_id: int, stage: Optional[str], db: DBSession) -> RacePredictionsResponse:
+    target_stage = (stage or "POST_QUALIFYING").upper()
+    if target_stage not in VALID_PREDICTION_STAGES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid prediction stage '{stage}'. Supported predictive stages: PRE_FP1, POST_FP1, POST_FP2, POST_FP3, POST_QUALIFYING",
+        )
+
+    try:
+        service = PredictionService(db)
+        return service.predict_race_stage(race_id=race_id, stage=target_stage)
+    except HTTPException:
+        raise
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Race with ID {race_id} not found",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate race predictions: {str(e)}",
+        )
+
+
 @router.get(
     "/{race_id}/predictions",
-    response_model=List[PredictionResponse],
+    response_model=RacePredictionsResponse,
     summary="Get race predictions",
-    description="Retrieve stage-aware model predictions for a race (e.g. PRE_FP1, POST_FP1, POST_FP2, POST_FP3, POST_QUALIFYING, FINAL). Returns empty list if no predictions exist.",
+    description="Retrieve stage-aware model predictions for a race. Defaults to POST_QUALIFYING stage if omitted.",
 )
 def get_race_predictions(
     race_id: int,
     stage: Optional[str] = Query(
         None,
-        description="Filter by prediction stage (e.g. PRE_FP1, POST_FP1, POST_FP2, POST_FP3, POST_QUALIFYING, FINAL)",
+        description="Filter by prediction stage (e.g. PRE_FP1, POST_FP1, POST_FP2, POST_FP3, POST_QUALIFYING)",
     ),
+    db: DBSession = Depends(get_db),
+):
+    return _get_race_predictions_impl(race_id, stage, db)
+
+
+@router.get(
+    "/{race_id}/predictions/{stage}",
+    response_model=RacePredictionsResponse,
+    summary="Get stage-specific race predictions",
+    description="Retrieve stage-aware model predictions for a specific race-weekend stage.",
+)
+def get_race_predictions_by_stage(
+    race_id: int,
+    stage: str,
+    db: DBSession = Depends(get_db),
+):
+    return _get_race_predictions_impl(race_id, stage, db)
+
+
+@router.get(
+    "/{race_id}/track-geometry",
+    response_model=TrackGeometryResponse,
+    summary="Get race track geometry",
+    description="Retrieve normalized track geometry coordinates for a race circuit from FastF1 telemetry.",
+)
+def get_race_track_geometry(
+    race_id: int,
     db: DBSession = Depends(get_db),
 ):
     race = db.get(Race, race_id)
@@ -152,15 +217,25 @@ def get_race_predictions(
             detail=f"Race with ID {race_id} not found",
         )
 
-    stmt = (
-        select(Prediction)
-        .where(Prediction.race_id == race_id)
-        .options(joinedload(Prediction.driver).joinedload(Driver.team))
-    )
+    try:
+        service = TrackGeometryService()
+        geometry_data = service.get_track_geometry(
+            race_id=race.id,
+            season=race.season,
+            round_num=race.round,
+            race_name=race.race_name,
+            circuit=race.circuit,
+        )
+        return geometry_data
+    except TrackGeometryUnavailableError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Track geometry telemetry unavailable for race ID {race_id}: {str(e)}",
+        )
+    except Exception as e:
+        logger.exception("Failed to retrieve track geometry for race_id %d: %s", race_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve track geometry telemetry.",
+        )
 
-    if stage:
-        stmt = stmt.where(Prediction.prediction_stage == stage.upper())
-
-    stmt = stmt.order_by(Prediction.predicted_position.asc().nulls_last())
-    predictions = db.scalars(stmt).all()
-    return predictions

@@ -15,7 +15,6 @@ SUPPORTED_PREDICTION_STAGES = [
     "POST_FP2",
     "POST_FP3",
     "POST_QUALIFYING",
-    "FINAL",
 ]
 
 

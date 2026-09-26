@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>F1 Race Intelligence — Predictive Telemetry Analytics</title>
+  <meta name="description" content="Production F1 Race Intelligence dashboard exposing machine learning predictions, race-share win probabilities, and weekend stage progression.">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- HEADER & BRANDING -->
+    <header class="app-header">
+      <div class="brand-section">
+        <div class="brand-logo-icon">F1</div>
+        <div>
+          <h1 class="brand-title">
+            F1 RACE INTELLIGENCE
+            <span style="font-size: 10px; padding: 2px 6px; background: rgba(0,242,254,0.15); border: 1px solid rgba(0,242,254,0.4); color: var(--accent-cyan); border-radius: 3px; font-family: var(--font-mono);">ML v1.0</span>
+          </h1>
+          <div class="brand-subtitle">Predictive Telemetry & Race Strategy Engine</div>
+        </div>
+      </div>
+
+      <div class="status-badge-container">
+        <div class="live-indicator">
+          <span class="live-dot"></span>
+          <span id="apiStatusText">PREDICTION SERVICE ACTIVE</span>
+        </div>
+        <button id="refreshBtn" class="btn-icon" title="Refresh Telemetry">
+          <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- RACE CONTROL & STAGE TIMELINE PANEL -->
+    <section class="race-control-panel">
+      <div class="race-control-header">
+        <div class="selector-group">
+          <span class="control-label"><i data-lucide="flag" style="width: 14px; height: 14px; display: inline; vertical-align: middle; margin-right: 4px;"></i> Select Grand Prix:</span>
+          <select id="raceSelect" class="race-select">
+            <option value="">Loading 2025 Calendar...</option>
+          </select>
+        </div>
+
+        <div class="race-details-summary">
+          <div class="detail-item">
+            <span class="detail-label">Season / Round</span>
+            <span id="raceRoundText" class="detail-value">—</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Circuit</span>
+            <span id="raceCircuitText" class="detail-value">—</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Race Date</span>
+            <span id="raceDateText" class="detail-value">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stage Segmented Control Bar -->
+      <div class="stage-timeline-container" id="stageTimeline">
+        <button class="stage-btn" data-stage="PRE_FP1">
+          <i data-lucide="clock" style="width: 14px; height: 14px;"></i> PRE FP1
+        </button>
+        <button class="stage-btn" data-stage="POST_FP1">
+          <i data-lucide="zap" style="width: 14px; height: 14px;"></i> AFTER FP1
+        </button>
+        <button class="stage-btn" data-stage="POST_FP2">
+          <i data-lucide="activity" style="width: 14px; height: 14px;"></i> AFTER FP2
+        </button>
+        <button class="stage-btn" data-stage="POST_FP3">
+          <i data-lucide="gauge" style="width: 14px; height: 14px;"></i> AFTER FP3
+        </button>
+        <button class="stage-btn active" data-stage="POST_QUALIFYING">
+          <i data-lucide="trophy" style="width: 14px; height: 14px;"></i> POST QUALIFYING
+        </button>
+      </div>
+    </section>
+
+    <!-- TOP KPI METRICS BANNER -->
+    <section class="kpi-grid">
+      <div class="kpi-card cyan">
+        <div class="kpi-header">
+          <span class="kpi-title">Highest Race Share</span>
+          <i data-lucide="crown" class="kpi-icon"></i>
+        </div>
+        <div class="kpi-driver-row">
+          <div class="kpi-driver-name" id="topShareDriver">—</div>
+          <div class="kpi-value" id="topShareValue">0.0%</div>
+        </div>
+        <div class="kpi-subtext" id="topShareTeam">Selected stage leader</div>
+      </div>
+
+      <div class="kpi-card green">
+        <div class="kpi-header">
+          <span class="kpi-title">Top Podium Favorite</span>
+          <i data-lucide="award" class="kpi-icon"></i>
+        </div>
+        <div class="kpi-driver-row">
+          <div class="kpi-driver-name" id="topPodiumDriver">—</div>
+          <div class="kpi-value" id="topPodiumValue">0.0%</div>
+        </div>
+        <div class="kpi-subtext" id="topPodiumTeam">Top 3 finish probability</div>
+      </div>
+
+      <div class="kpi-card amber">
+        <div class="kpi-header">
+          <span class="kpi-title">Top-5 Odds Favorite</span>
+          <i data-lucide="target" class="kpi-icon"></i>
+        </div>
+        <div class="kpi-driver-row">
+          <div class="kpi-driver-name" id="top5Driver">—</div>
+          <div class="kpi-value" id="top5Value">0.0%</div>
+        </div>
+        <div class="kpi-subtext" id="top5Team">Top 5 finish odds</div>
+      </div>
+
+      <div class="kpi-card red">
+        <div class="kpi-header">
+          <span class="kpi-title">Data Completeness</span>
+          <i data-lucide="database" class="kpi-icon"></i>
+        </div>
+        <div class="kpi-driver-row">
+          <div class="kpi-driver-name" style="font-size: 14px;" id="dataCompletenessText">Historical Form</div>
+          <div class="kpi-value" style="font-size: 20px; color: var(--accent-green);" id="dataCompletenessValue">100%</div>
+        </div>
+        <div class="kpi-subtext">Session data feed status</div>
+      </div>
+    </section>
+
+    <!-- MAIN DASHBOARD GRID -->
+    <div class="dashboard-grid">
+
+      <!-- LEFT: MOTORSPORT TIMING BOARD TABLE -->
+      <main class="dashboard-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">
+            <i data-lucide="list-ordered" style="color: var(--accent-cyan); width: 18px; height: 18px;"></i>
+            Race Prediction Timing Board
+          </h2>
+          <div class="panel-actions">
+            <input type="text" id="searchInput" placeholder="Filter driver or team..." style="background: var(--bg-inset); border: 1px solid var(--border-subtle); color: var(--text-primary); padding: 4px 10px; border-radius: 4px; font-size: 12px; width: 160px; outline: none;">
+          </div>
+        </div>
+
+        <div class="timing-table-wrapper">
+          <table class="timing-table">
+            <thead>
+              <tr>
+                <th style="width: 40px;">POS</th>
+                <th>DRIVER</th>
+                <th>TEAM</th>
+                <th class="sortable" id="sortRaceShare">RACE SHARE <i data-lucide="chevron-down" style="width: 12px; display: inline;"></i></th>
+                <th class="sortable" id="sortRawWin">RAW WIN %</th>
+                <th class="sortable" id="sortPodium">PODIUM %</th>
+                <th class="sortable" id="sortTop5">TOP 5 %</th>
+                <th class="sortable" id="sortFinish">PRED FINISH</th>
+              </tr>
+            </thead>
+            <tbody id="timingTableBody">
+              <tr>
+                <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Loading live ML prediction matrix...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </main>
+
+      <!-- RIGHT: ANALYTICS COMMAND CENTER -->
+      <aside class="dashboard-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">
+            <i data-lucide="bar-chart-2" style="color: var(--accent-cyan); width: 18px; height: 18px;"></i>
+            Race Share Analytics
+          </h2>
+        </div>
+
+        <!-- Chart 1: Race Share Bar Distribution -->
+        <div class="chart-card">
+          <div class="chart-card-title">
+            <span>Win Race-Share Distribution (%)</span>
+            <span style="font-size: 10px; color: var(--accent-cyan); font-family: var(--font-mono);">Normalized $\sum = 100\%$</span>
+          </div>
+          <div class="bar-chart-container" id="raceShareBarChart">
+            <!-- Dynamic Bar Chart Rows -->
+          </div>
+        </div>
+
+        <!-- Data Availability Matrix -->
+        <div class="chart-card">
+          <div class="chart-card-title">
+            <span>Session Feature Availability Matrix</span>
+          </div>
+          <div class="availability-grid" id="availabilityGrid">
+            <div class="avail-item active">
+              <div class="avail-label">FORM</div>
+              <div class="avail-status active">ACTIVE</div>
+            </div>
+            <div class="avail-item">
+              <div class="avail-label">FP1</div>
+              <div class="avail-status inactive">MASKED</div>
+            </div>
+            <div class="avail-item">
+              <div class="avail-label">FP2</div>
+              <div class="avail-status inactive">MASKED</div>
+            </div>
+            <div class="avail-item">
+              <div class="avail-label">FP3</div>
+              <div class="avail-status inactive">MASKED</div>
+            </div>
+            <div class="avail-item">
+              <div class="avail-label">QUALI</div>
+              <div class="avail-status inactive">MASKED</div>
+            </div>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 10px; line-height: 1.4;">
+            <i data-lucide="info" style="width: 12px; height: 12px; display: inline; vertical-align: middle;"></i>
+            Current predictions use historical driver/team form. Detailed session telemetry will update as FastF1 session feeds are processed.
+          </div>
+        </div>
+
+      </aside>
+
+    </div>
+  </div>
+
+  <!-- DRIVER INSPECTOR MODAL -->
+  <div class="modal-overlay" id="driverModal">
+    <div class="modal-container">
+      <div class="modal-header">
+        <h3 class="modal-title">
+          <span id="modalTeamPill" class="team-pill"></span>
+          <span id="modalDriverName">Lando Norris</span>
+          <span id="modalDriverCode" class="driver-code-tag">NOR</span>
+        </h3>
+        <button class="btn-close" id="closeModalBtn">&times;</button>
+      </div>
+
+      <div class="inspector-grid">
+        <div class="spec-box">
+          <div class="spec-label">Race Share Probability</div>
+          <div class="spec-value" id="modalRaceShare">0.0%</div>
+        </div>
+        <div class="spec-box">
+          <div class="spec-label">Raw Model Win Probability</div>
+          <div class="spec-value" style="color: var(--accent-amber);" id="modalRawWin">0.0%</div>
+        </div>
+        <div class="spec-box">
+          <div class="spec-label">Podium Probability (Top 3)</div>
+          <div class="spec-value" style="color: var(--accent-green);" id="modalPodium">0.0%</div>
+        </div>
+        <div class="spec-box">
+          <div class="spec-label">Top 5 Probability</div>
+          <div class="spec-value" style="color: var(--text-primary);" id="modalTop5">0.0%</div>
+        </div>
+      </div>
+
+      <div class="spec-box" style="margin-bottom: 16px;">
+        <div class="spec-label">Predicted Finish Position</div>
+        <div style="display: flex; align-items: baseline; justify-content: space-between; margin-top: 4px;">
+          <span class="spec-value" style="color: var(--accent-cyan); font-size: 24px;" id="modalPredPosition">P1.8</span>
+          <span style="font-size: 12px; color: var(--text-muted);" id="modalTeamName">McLaren F1 Team</span>
+        </div>
+      </div>
+
+      <div style="text-align: right;">
+        <button class="btn-icon" id="closeModalFooterBtn" style="padding: 8px 16px; font-weight: 600;">Close Inspector</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>

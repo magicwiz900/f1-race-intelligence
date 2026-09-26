@@ -3,6 +3,7 @@ from app.schemas.driver import DriverResponse, DriverSummaryResponse
 from app.schemas.race import RaceResponse
 from app.schemas.session import SessionResponse, SessionResultResponse, SessionDetailResponse
 from app.schemas.prediction import PredictionResponse
+from app.schemas.track_geometry import TrackPoint, TrackGeometryResponse
 
 __all__ = [
     "TeamResponse",
@@ -14,4 +15,6 @@ __all__ = [
     "SessionResultResponse",
     "SessionDetailResponse",
     "PredictionResponse",
+    "TrackPoint",
+    "TrackGeometryResponse",
 ]

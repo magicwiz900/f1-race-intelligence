@@ -52,3 +52,7 @@ ml/artifacts/metadata/*.json
 *.swo
 .DS_Store
 Thumbs.db
+
+# FastF1 generated cache
+.fastf1_cache/
+backend/.fastf1_cache/
