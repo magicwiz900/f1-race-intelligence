@@ -9,7 +9,7 @@ from app.models import Driver, Race, Session as F1Session, SessionResult, Team
 from ml.datasets.build_dataset import load_historical_race_results
 from ml.features.feature_pipeline import FeaturePipeline
 from ml.features.metadata import FEATURE_METADATA
-from ml.stages import PredictionStage
+from ml.stages import PredictionStage, is_stage_at_or_after
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,10 @@ class FeatureAdapter:
         """
         Extract feature matrix, driver roster metadata, and data availability flags for a race and stage.
         """
+        # Ensure stage is PredictionStage enum
+        if isinstance(stage, str):
+            stage = PredictionStage(stage.upper())
+
         # Load historical race results prior to race
         historical_df = load_historical_race_results(self.db)
 
@@ -51,47 +55,94 @@ class FeatureAdapter:
         )
 
         weekend_rows = self.db.execute(sess_stmt).all()
-
-        if weekend_rows:
-            weekend_df = pd.DataFrame(
+        weekend_df = (
+            pd.DataFrame(
                 weekend_rows,
                 columns=["session_type", "driver_id", "position", "lap_time", "driver_code", "driver_name", "team_id", "team_name"],
             )
-            driver_roster = (
-                weekend_df[["driver_id", "driver_code", "driver_name", "team_id", "team_name"]]
-                .drop_duplicates(subset=["driver_id"])
-                .to_dict(orient="records")
+            if weekend_rows
+            else pd.DataFrame(columns=["session_type", "driver_id", "position", "lap_time", "driver_code", "driver_name", "team_id", "team_name"])
+        )
+
+        # Build comprehensive driver roster for the race
+        roster_map: Dict[int, Dict[str, Any]] = {}
+        if weekend_rows:
+            for r in weekend_rows:
+                d_id = int(r.driver_id)
+                if d_id not in roster_map:
+                    roster_map[d_id] = {
+                        "driver_id": d_id,
+                        "driver_code": str(r.driver_code),
+                        "driver_name": str(r.driver_name),
+                        "team_id": int(r.team_id) if pd.notna(r.team_id) else None,
+                        "team_name": str(r.team_name) if pd.notna(r.team_name) else None,
+                    }
+
+        # Enrich roster with prior season drivers or active team drivers in DB
+        prior_season_driver_stmt = (
+            select(
+                Driver.id.label("driver_id"),
+                Driver.driver_code,
+                Driver.name.label("driver_name"),
+                Driver.team_id,
+                Team.name.label("team_name"),
             )
+            .join(SessionResult, SessionResult.driver_id == Driver.id)
+            .join(F1Session, F1Session.id == SessionResult.session_id)
+            .join(Race, Race.id == F1Session.race_id)
+            .outerjoin(Team, Team.id == Driver.team_id)
+            .where(Race.season == race.season, Race.round < race.round)
+            .distinct()
+        )
+        season_drivers = self.db.execute(prior_season_driver_stmt).all()
+
+        if season_drivers:
+            for r in season_drivers:
+                d_id = int(r.driver_id)
+                if d_id not in roster_map:
+                    roster_map[d_id] = {
+                        "driver_id": d_id,
+                        "driver_code": str(r.driver_code),
+                        "driver_name": str(r.driver_name),
+                        "team_id": int(r.team_id) if pd.notna(r.team_id) else None,
+                        "team_name": str(r.team_name) if pd.notna(r.team_name) else None,
+                    }
         else:
-            # Fallback to querying drivers directly from database
-            weekend_df = pd.DataFrame(columns=["session_type", "driver_id", "position", "lap_time", "driver_code", "driver_name", "team_id", "team_name"])
-            drivers_db = self.db.scalars(select(Driver)).all()
-            driver_roster = []
+            drivers_db = self.db.scalars(
+                select(Driver).where(Driver.team_id.isnot(None))
+            ).all()
+            if not drivers_db:
+                drivers_db = self.db.scalars(select(Driver)).all()
+
             for d in drivers_db:
-                driver_roster.append({
-                    "driver_id": d.id,
-                    "driver_code": d.driver_code,
-                    "driver_name": d.name,
-                    "team_id": d.team_id,
-                    "team_name": d.team.name if d.team else None,
-                })
+                d_id = int(d.id)
+                if d_id not in roster_map:
+                    roster_map[d_id] = {
+                        "driver_id": d_id,
+                        "driver_code": str(d.driver_code),
+                        "driver_name": str(d.name),
+                        "team_id": int(d.team_id) if d.team_id is not None else None,
+                        "team_name": str(d.team.name) if d.team else None,
+                    }
+
+        driver_roster = list(roster_map.values())
 
         feature_cols = list(FEATURE_METADATA.keys())
         feature_rows = []
         drivers_info = []
 
-        # Check data availability in current weekend data
+        # Check stage-aware data availability in current weekend data
         has_fp1 = not weekend_df[weekend_df["session_type"] == "FP1"].empty if not weekend_df.empty else False
         has_fp2 = not weekend_df[weekend_df["session_type"] == "FP2"].empty if not weekend_df.empty else False
         has_fp3 = not weekend_df[weekend_df["session_type"] == "FP3"].empty if not weekend_df.empty else False
         has_quali = not weekend_df[weekend_df["session_type"] == "QUALIFYING"].empty if not weekend_df.empty else False
 
         data_availability = {
-            "historical_form": True,
-            "fp1": has_fp1,
-            "fp2": has_fp2,
-            "fp3": has_fp3,
-            "qualifying": has_quali,
+            "historical_form": not historical_df.empty,
+            "fp1": has_fp1 and is_stage_at_or_after(stage, PredictionStage.POST_FP1),
+            "fp2": has_fp2 and is_stage_at_or_after(stage, PredictionStage.POST_FP2),
+            "fp3": has_fp3 and is_stage_at_or_after(stage, PredictionStage.POST_FP3),
+            "qualifying": has_quali and is_stage_at_or_after(stage, PredictionStage.POST_QUALIFYING),
         }
 
         for d_info in driver_roster:

@@ -10,8 +10,12 @@ from app.schemas.prediction import PredictionResponse, RacePredictionsResponse
 from app.schemas.race import RaceResponse
 from app.schemas.session import SessionResponse, SessionResultResponse
 from app.schemas.track_geometry import TrackGeometryResponse
+from app.schemas.sector_geometry import SectorGeometryResponse
 from app.services.f1_data.track_geometry import TrackGeometryService, TrackGeometryUnavailableError
+from app.services.f1_data.sector_geometry import SectorGeometryService, SectorGeometryUnavailableError
 from app.services.prediction_service.predictor import PredictionService
+from app.services.race_service import get_next_upcoming_race
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,66 @@ def list_races(
     stmt = stmt.offset(offset).limit(limit)
     races = db.scalars(stmt).all()
     return races
+
+
+@router.get(
+    "/upcoming",
+    response_model=RaceResponse,
+    summary="Get next upcoming race",
+    description="Retrieve details of the next chronologically upcoming race relative to today (or optional reference date).",
+)
+def get_upcoming_race(
+    as_of_date: Optional[str] = Query(None, description="Optional reference date (YYYY-MM-DD)"),
+    db: DBSession = Depends(get_db),
+):
+    ref_d = None
+    if as_of_date:
+        try:
+            ref_d = date.fromisoformat(as_of_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format for as_of_date. Use YYYY-MM-DD.",
+            )
+
+    race = get_next_upcoming_race(db, as_of_date=ref_d)
+    if not race:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No upcoming races found in calendar.",
+        )
+    return race
+
+
+@router.get(
+    "/upcoming/predictions",
+    response_model=RacePredictionsResponse,
+    summary="Get upcoming race predictions",
+    description="Retrieve predictions for the next upcoming race in the calendar. Defaults to PRE_FP1 stage.",
+)
+def get_upcoming_race_predictions(
+    stage: Optional[str] = Query("PRE_FP1", description="Filter by prediction stage (defaults to PRE_FP1)"),
+    as_of_date: Optional[str] = Query(None, description="Optional reference date (YYYY-MM-DD)"),
+    db: DBSession = Depends(get_db),
+):
+    ref_d = None
+    if as_of_date:
+        try:
+            ref_d = date.fromisoformat(as_of_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format for as_of_date. Use YYYY-MM-DD.",
+            )
+
+    race = get_next_upcoming_race(db, as_of_date=ref_d)
+    if not race:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No upcoming races found in calendar.",
+        )
+
+    return _get_race_predictions_impl(race.id, stage, db)
 
 
 @router.get(
@@ -238,4 +302,45 @@ def get_race_track_geometry(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve track geometry telemetry.",
         )
+
+
+@router.get(
+    "/{race_id}/sector-geometry",
+    response_model=SectorGeometryResponse,
+    summary="Get race sector geometry",
+    description="Retrieve normalized sector-by-sector track geometry coordinates for a race circuit from FastF1 telemetry.",
+)
+def get_race_sector_geometry(
+    race_id: int,
+    db: DBSession = Depends(get_db),
+):
+    race = db.get(Race, race_id)
+    if not race:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Race with ID {race_id} not found",
+        )
+
+    try:
+        service = SectorGeometryService()
+        geometry_data = service.get_sector_geometry(
+            race_id=race.id,
+            season=race.season,
+            round_num=race.round,
+            race_name=race.race_name,
+            circuit=race.circuit,
+        )
+        return geometry_data
+    except SectorGeometryUnavailableError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Sector geometry telemetry unavailable for race ID {race_id}: {str(e)}",
+        )
+    except Exception as e:
+        logger.exception("Failed to retrieve sector geometry for race_id %d: %s", race_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve sector geometry telemetry.",
+        )
+
 

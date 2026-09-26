@@ -36,15 +36,7 @@ class FeaturePipeline:
         """
         feature_dict: Dict[str, Any] = {}
 
-        # 1. Historical Driver & Team Form
-        driver_form = compute_driver_form_features(
-            driver_id=driver_id,
-            target_season=season,
-            target_round=round_num,
-            historical_race_results_df=historical_race_results_df,
-        )
-        feature_dict.update(driver_form)
-
+        # 1. Historical Team Form & Driver Form (with Team Fallback for Rookies)
         team_form = compute_team_form_features(
             team_id=team_id,
             target_season=season,
@@ -52,6 +44,15 @@ class FeaturePipeline:
             historical_race_results_df=historical_race_results_df,
         )
         feature_dict.update(team_form)
+
+        driver_form = compute_driver_form_features(
+            driver_id=driver_id,
+            target_season=season,
+            target_round=round_num,
+            historical_race_results_df=historical_race_results_df,
+            team_form_fallback=team_form,
+        )
+        feature_dict.update(driver_form)
 
         # 2. Circuit History
         circuit_hist = compute_circuit_history_features(

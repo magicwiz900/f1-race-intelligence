@@ -5,7 +5,7 @@ import sys
 from typing import List, Optional
 import numpy as np
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DBSession
 
 from app.database import SessionLocal
@@ -40,7 +40,7 @@ def load_historical_race_results(db: DBSession) -> pd.DataFrame:
         .join(F1Session, F1Session.id == SessionResult.session_id)
         .join(Race, Race.id == F1Session.race_id)
         .join(Driver, Driver.id == SessionResult.driver_id)
-        .where(F1Session.session_type == "RACE")
+        .where(func.upper(F1Session.session_type).in_(["RACE", "R"]))
     )
 
     rows = db.execute(stmt).all()
